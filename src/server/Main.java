@@ -5,6 +5,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.Statement;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -33,6 +34,9 @@ public class Main
 
         Class.forName("oracle.jdbc.driver.OracleDriver");
 
+        ExecutorService executor = Executors.newWorkStealingPool();
+        Set<Callable<String>> callables = new HashSet<>();
+
         try (Connection connection = DriverManager.getConnection(Сonstant.url,
             Сonstant.username, Сonstant.password);
                 Statement statement = connection.createStatement();
@@ -40,32 +44,37 @@ public class Main
                     .executeQuery(Сonstant.sqlQuery);)
         {
 
-            ExecutorService executor = Executors.newWorkStealingPool();
-            Set<Callable<String>> callables = new HashSet<>();
+            List<SolrInputDocument> documents = new ArrayList<>();
 
-            while (resultSet.next())
+            boolean hasNext;
+
+            while (hasNext = resultSet.next())
             {
-                SolrInputDocument document = getSolrDoc(resultSet);
+                documents.add(getSolrDoc(resultSet));
 
-                callables.add(() -> {
+                if (documents.size() == 100 || !hasNext)
+                {
+                    List<SolrInputDocument> result = new ArrayList<>(documents);
 
-                    solr.add(document);
-                    solr.commit();
+                    callables.add(() -> {
+                        solr.add(result);
+                        solr.commit();
+                        return Thread.currentThread().getName().concat(" - Ok");
+                    });
 
-                    return Thread.currentThread().getName().concat(" - Ok");
-                });
-
+                    documents.clear();
+                }
             }
-
-            List<Future<String>> futures = executor.invokeAll(callables);
-            for (Future<String> future : futures)
-            {
-                System.out.println(future.get());
-            }
-
-            executor.shutdown();
-
         }
+
+        List<Future<String>> futures = executor.invokeAll(callables);
+
+        for (Future<String> future : futures)
+        {
+            System.out.println(future.get());
+        }
+
+        executor.shutdown();
 
     }
 
